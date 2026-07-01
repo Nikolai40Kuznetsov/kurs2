@@ -63,6 +63,7 @@ class Order(Base):
     delivery_method = Column(String(50), nullable=False)
     pickup_point_id = Column(Integer, ForeignKey('pickup_points.id', ondelete='SET NULL'), nullable=True)
     items = Column(JSON, nullable=False)  # Хранит список товаров в формате JSON
+    status = Column(String(20), default='pending')  # 'pending' или 'completed'
     
     user = relationship("User", back_populates="orders")
     pickup_point = relationship("PickupPoint", back_populates="orders")
@@ -145,7 +146,6 @@ class UserManager:
     def add_user(self, username, password, role='user', pickup_point_id=None):
         # Добавляет нового пользователя
         try:
-            # Проверяем, существует ли пользователь
             existing_user = self.session.query(User).filter_by(username=username).first()
             if existing_user:
                 return False
@@ -160,7 +160,6 @@ class UserManager:
             return False
     
     def get_user_id(self, username):
-        # Получает ID пользователя по имени
         user = self.session.query(User).filter_by(username=username).first()
         return user.id if user else None
     
@@ -168,15 +167,12 @@ class UserManager:
         return self.session.query(User).filter_by(id=user_id).first()
     
     def get_all_users(self):
-        """Возвращает список всех пользователей"""
         return self.session.query(User).all()
     
     def get_all_sellers(self):
-        """Возвращает список всех продавцов"""
         return self.session.query(User).filter_by(role='seller').all()
     
     def update_seller_pickup_point(self, seller_id, pickup_point_id):
-        """Обновляет пункт выдачи продавца"""
         try:
             seller = self.session.query(User).filter_by(id=seller_id).first()
             if seller and seller.role == 'seller':
@@ -190,35 +186,27 @@ class UserManager:
             return False
     
     def delete_seller(self, seller_id):
-        """Удаляет продавца"""
         try:
             seller = self.session.query(User).filter_by(id=seller_id, role='seller').first()
             if not seller:
                 return False, "Продавец не найден"
             
-            # Проверяем, есть ли у продавца заказы
             orders_count = self.session.query(Order).filter_by(user_id=seller_id).count()
             if orders_count > 0:
                 return False, f"У продавца есть {orders_count} заказ(ов). Сначала удалите заказы."
             
-            # Удаляем корзину продавца (если есть)
             self.session.query(Cart).filter_by(user_id=seller_id).delete()
-            
-            # Удаляем продавца
             self.session.delete(seller)
             self.session.commit()
             return True, "Продавец удален"
         except Exception as e:
             self.session.rollback()
-            print(f"Ошибка при удалении продавца: {e}")
             return False, str(e)
     
     def get_all_pickup_points(self):
-        """Возвращает список всех пунктов выдачи"""
         return self.session.query(PickupPoint).all()
     
     def add_pickup_point(self, name, address, working_hours):
-        """Добавляет новый пункт выдачи"""
         try:
             point = PickupPoint(name=name, address=address, working_hours=working_hours)
             self.session.add(point)
@@ -230,43 +218,34 @@ class UserManager:
             return False
     
     def delete_pickup_point(self, point_id):
-        """Удаляет пункт выдачи"""
         try:
             point = self.session.query(PickupPoint).filter_by(id=point_id).first()
             if not point:
                 return False, "Пункт выдачи не найден"
             
-            # Проверяем, есть ли привязанные продавцы
             sellers = self.session.query(User).filter_by(pickup_point_id=point_id).all()
             if sellers:
-                # Отвязываем продавцов от пункта выдачи
                 for seller in sellers:
                     seller.pickup_point_id = None
                 self.session.commit()
             
-            # Проверяем, есть ли заказы с этим пунктом выдачи
             orders = self.session.query(Order).filter_by(pickup_point_id=point_id).all()
             if orders:
-                # Отвязываем заказы от пункта выдачи
                 for order in orders:
                     order.pickup_point_id = None
                 self.session.commit()
             
-            # Удаляем пункт выдачи
             self.session.delete(point)
             self.session.commit()
             return True, "Пункт выдачи удален"
         except Exception as e:
             self.session.rollback()
-            print(f"Ошибка при удалении пункта выдачи: {e}")
             return False, str(e)
     
     def close(self):
-        """Закрывает сессию"""
         self.session.close()
 
 class CartManager:
-    """Класс для управления корзиной через БД"""
     def __init__(self, username):
         self.session = Session()
         self.user_manager = UserManager()
@@ -275,12 +254,9 @@ class CartManager:
             self.user_manager.close()
     
     def save_cart(self, cart):
-        """Сохраняет корзину в БД"""
         try:
-            # Удаляем старые записи корзины для этого пользователя
             self.session.query(Cart).filter_by(user_id=self.user_id).delete()
             
-            # Добавляем новые записи
             for product_id, item_data in cart.items():
                 product = item_data["product"]
                 cart_item = Cart(
@@ -301,7 +277,6 @@ class CartManager:
             return False
     
     def load_cart(self):
-        """Загружает корзину из БД"""
         try:
             cart_items = self.session.query(Cart).filter_by(user_id=self.user_id).all()
             
@@ -323,27 +298,22 @@ class CartManager:
             return {}
     
     def clear_cart(self):
-        """Очищает корзину пользователя в БД"""
         try:
             self.session.query(Cart).filter_by(user_id=self.user_id).delete()
             self.session.commit()
             return True
         except Exception as e:
             self.session.rollback()
-            print(f"Ошибка при очистке корзины: {e}")
             return False
     
     def close(self):
-        """Закрывает сессию"""
         self.session.close()
 
 class OrderManager:
-    """Класс для управления заказами"""
     def __init__(self):
         self.session = Session()
     
     def save_order(self, user_id, user_name, items, total, recipient_name, address, phone, delivery_method, pickup_point_id=None):
-        """Сохраняет заказ в БД"""
         try:
             order = Order(
                 user_id=user_id,
@@ -354,7 +324,8 @@ class OrderManager:
                 phone=phone,
                 delivery_method=delivery_method,
                 pickup_point_id=pickup_point_id,
-                items=items
+                items=items,
+                status='pending'
             )
             self.session.add(order)
             self.session.commit()
@@ -365,22 +336,43 @@ class OrderManager:
             return False
     
     def get_all_orders(self):
-        """Получает все заказы"""
         try:
             return self.session.query(Order).order_by(Order.order_date.desc()).all()
         except Exception as e:
             print(f"Ошибка при получении заказов: {e}")
             return []
     
+    def get_orders_for_seller(self, pickup_point_id):
+        """Получает заказы для продавца - только его пункт выдачи и курьерские"""
+        try:
+            return self.session.query(Order).filter(
+                (Order.pickup_point_id == pickup_point_id) | 
+                (Order.delivery_method == "Курьером")
+            ).order_by(Order.order_date.desc()).all()
+        except Exception as e:
+            print(f"Ошибка при получении заказов для продавца: {e}")
+            return []
+    
+    def complete_order(self, order_id):
+        """Отмечает заказ как выполненный"""
+        try:
+            order = self.session.query(Order).filter_by(id=order_id).first()
+            if order:
+                order.status = 'completed'
+                self.session.commit()
+                return True
+            return False
+        except Exception as e:
+            self.session.rollback()
+            print(f"Ошибка при выполнении заказа: {e}")
+            return False
+    
     def close(self):
-        """Закрывает сессию"""
         self.session.close()
 
 class ProductManager:
-    """Класс для управления товарами"""
+    """Класс для управления товарами (единый экземпляр)"""
     def __init__(self):
-        # Используем список товаров, хранящийся в памяти
-        # В реальном приложении здесь могла бы быть таблица в БД
         self.products = [
             {"id": 1, "name": "Ноутбук", "price": 45000, "stock": 10},
             {"id": 2, "name": "Смартфон", "price": 25000, "stock": 15},
@@ -395,7 +387,6 @@ class ProductManager:
         return self.products
     
     def add_product(self, name, price, stock):
-        """Добавляет новый товар"""
         try:
             product = {
                 "id": self.next_id,
@@ -411,7 +402,6 @@ class ProductManager:
             return False
     
     def update_product(self, product_id, name=None, price=None, stock=None):
-        """Обновляет товар"""
         try:
             for product in self.products:
                 if product["id"] == product_id:
@@ -428,7 +418,6 @@ class ProductManager:
             return False
     
     def delete_product(self, product_id):
-        """Удаляет товар"""
         try:
             for i, product in enumerate(self.products):
                 if product["id"] == product_id:
@@ -554,7 +543,6 @@ class LoginWindow(QMainWindow):
         self.reg_window.show()
     
     def closeEvent(self, event):
-        """Закрываем соединение с БД при закрытии окна"""
         self.user_manager.close()
         event.accept()
 
@@ -664,6 +652,7 @@ class MainApplication(QMainWindow):
         self.role = role
         self.cart_manager = CartManager(username)
         self.order_manager = OrderManager()
+        # Создаем единый экземпляр ProductManager
         self.product_manager = ProductManager()
         self.setWindowTitle(f"Интернет-магазин - Пользователь: {username} ({role})")
         self.setGeometry(100, 100, 1200, 700)
@@ -749,34 +738,31 @@ class MainApplication(QMainWindow):
             QComboBox {
                 color: black;
             }
+            QTableWidget::item:disabled {
+                color: #999;
+            }
         """)
         
         self.products = self.product_manager.get_all_products()
         
-        # Загружаем корзину пользователя из БД (только для обычных пользователей)
         if self.role == 'user':
             self.cart = self.cart_manager.load_cart()
         else:
             self.cart = {}
         
-        # Создаем главный виджет и layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         
-        # Верхняя панель с кнопкой выхода
         top_panel = QHBoxLayout()
         
-        # Заголовок слева
         title_label = QLabel(f"Добро пожаловать, {username}!")
         title_label.setFont(QFont("Arial", 12, QFont.Bold))
         title_label.setStyleSheet("color: #9B59B6;")
         top_panel.addWidget(title_label)
         
-        # Растягиваем пространство
         top_panel.addStretch()
         
-        # Кнопка выхода справа
         logout_btn = QPushButton("Выход")
         logout_btn.setStyleSheet("""
             QPushButton {
@@ -793,29 +779,29 @@ class MainApplication(QMainWindow):
         
         main_layout.addLayout(top_panel)
         
-        # Вкладки
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
         
-        # Вкладка с товарами доступна всем
         self.products_tab = ProductsTab(self.products, self.add_to_cart, self.role)
         self.tabs.addTab(self.products_tab, "Товары")
         
         if self.role == 'user':
-            # Для обычных пользователей - корзина и доставка
             self.cart_tab = CartTab(self.cart, self.update_cart_quantities, self.remove_from_cart)
             self.delivery_tab = DeliveryTab(self.get_cart_summary, self.clear_cart_after_order, self.username, self.role)
             self.tabs.addTab(self.cart_tab, "Корзина")
             self.tabs.addTab(self.delivery_tab, "Доставка")
             self.tabs.currentChanged.connect(self.on_tab_changed)
         elif self.role == 'seller':
-            # Для продавцов - просмотр заказов и управление товарами
-            self.orders_tab = OrdersTab()
-            self.tabs.addTab(self.orders_tab, "Все заказы")
+            self.user_manager = UserManager()
+            user = self.user_manager.get_user_by_id(self.user_manager.get_user_id(username))
+            self.seller_pickup_point_id = user.pickup_point_id if user else None
+            self.user_manager.close()
+            
+            self.orders_tab = OrdersTab(self.role, self.seller_pickup_point_id)
+            self.tabs.addTab(self.orders_tab, "Заказы")
             self.products_management_tab = ProductsManagementTab(self.product_manager, self.role)
             self.tabs.addTab(self.products_management_tab, "Управление товарами")
         elif self.role == 'admin':
-            # Для админа - управление продавцами, пунктами выдачи и товарами
             self.admin_tab = AdminTab()
             self.tabs.addTab(self.admin_tab, "Управление продавцами")
             self.pickup_tab = PickupPointsTab()
@@ -824,20 +810,16 @@ class MainApplication(QMainWindow):
             self.tabs.addTab(self.products_management_tab, "Управление товарами")
     
     def logout(self):
-        """Выход из аккаунта"""
-        # Сохраняем корзину перед выходом
         if self.role == 'user':
             self.cart_manager.save_cart(self.cart)
         self.cart_manager.close()
         self.order_manager.close()
         self.close()
         
-        # Показываем окно авторизации
         self.login_window = LoginWindow()
         self.login_window.show()
     
     def closeEvent(self, event):
-        """Сохраняем корзину в БД при закрытии программы"""
         if self.role == 'user':
             self.cart_manager.save_cart(self.cart)
         self.cart_manager.close()
@@ -896,15 +878,14 @@ class MainApplication(QMainWindow):
         return items, total
     
     def clear_cart_after_order(self):
-        """Очищает корзину после оформления заказа"""
         self.cart.clear()
         self.cart_manager.clear_cart()
         self.update_cart_display()
     
     def on_tab_changed(self, index):
-        if index == 1 and hasattr(self, 'cart_tab'):  # Вкладка корзины
+        if index == 1 and hasattr(self, 'cart_tab'):
             self.cart_tab.update_cart_table()
-        elif index == 2 and hasattr(self, 'delivery_tab'):  # Вкладка доставки
+        elif index == 2 and hasattr(self, 'delivery_tab'):
             self.delivery_tab.update_summary()
 
 class ProductsTab(QWidget):
@@ -1137,25 +1118,21 @@ class DeliveryTab(QWidget):
         self.delivery_method.currentTextChanged.connect(self.on_delivery_method_changed)
         delivery_layout.addWidget(self.delivery_method)
         
-        # Контейнер для динамических полей
         self.dynamic_fields_widget = QWidget()
         self.dynamic_fields_layout = QVBoxLayout(self.dynamic_fields_widget)
         self.dynamic_fields_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Поле для адреса доставки (для курьера)
         self.address_input = QTextEdit()
         self.address_input.setPlaceholderText("Адрес доставки")
         self.address_input.setMaximumHeight(80)
         self.address_input.setMinimumHeight(60)
         self.dynamic_fields_layout.addWidget(self.address_input)
         
-        # Поле для пункта выдачи (для самовывоза)
         self.pickup_point_combo = QComboBox()
         self.pickup_point_combo.setMinimumHeight(35)
         self.update_pickup_points()
         self.dynamic_fields_layout.addWidget(self.pickup_point_combo)
         
-        # Информация о пункте выдачи
         self.pickup_info_label = QLabel()
         self.pickup_info_label.setStyleSheet("color: #2c3e50; font-size: 10px; padding: 5px;")
         self.pickup_info_label.setWordWrap(True)
@@ -1164,7 +1141,6 @@ class DeliveryTab(QWidget):
         
         delivery_layout.addWidget(self.dynamic_fields_widget)
         
-        # Показываем поле для курьера по умолчанию
         self.address_input.show()
         self.pickup_point_combo.hide()
         self.pickup_info_label.hide()
@@ -1189,25 +1165,22 @@ class DeliveryTab(QWidget):
         self.setLayout(layout)
     
     def update_pickup_points(self):
-        """Обновляет список пунктов выдачи"""
         self.pickup_point_combo.clear()
         for point in self.pickup_points:
             self.pickup_point_combo.addItem(point.name, point.id)
     
     def update_pickup_info(self, point_name):
-        """Обновляет информацию о выбранном пункте выдачи"""
         for point in self.pickup_points:
             if point.name == point_name:
                 self.pickup_info_label.setText(f"📍 {point.address}\n🕐 {point.working_hours}")
                 break
     
     def on_delivery_method_changed(self, method):
-        """Показывает/скрывает поля в зависимости от способа доставки"""
         if method == "Курьером":
             self.address_input.show()
             self.pickup_point_combo.hide()
             self.pickup_info_label.hide()
-        else:  # Самовывоз
+        else:
             self.address_input.hide()
             self.pickup_point_combo.show()
             self.pickup_info_label.show()
@@ -1243,20 +1216,17 @@ class DeliveryTab(QWidget):
                 QMessageBox.warning(self, "Ошибка", "Пожалуйста, введите адрес доставки")
                 return
             address = self.address_input.toPlainText()
-        else:  # Самовывоз
+        else:
             pickup_point_id = self.pickup_point_combo.currentData()
-            # Получаем адрес пункта выдачи
             for point in self.pickup_points:
                 if point.id == pickup_point_id:
                     address = f"Пункт выдачи: {point.name}, {point.address}"
                     break
         
-        # Получаем ID пользователя
         user_manager = UserManager()
         user_id = user_manager.get_user_id(self.username)
         user_manager.close()
         
-        # Сохраняем заказ в БД
         order_manager = OrderManager()
         success = order_manager.save_order(
             user_id=user_id,
@@ -1287,7 +1257,6 @@ class DeliveryTab(QWidget):
         order_info += f"\nИтого к оплате: {total} руб."
         QMessageBox.information(self, "Заказ оформлен", order_info)
         
-        # Очищаем корзину после оформления заказа
         self.clear_cart_callback()
         self.name_input.clear()
         self.address_input.clear()
@@ -1295,13 +1264,15 @@ class DeliveryTab(QWidget):
         self.update_summary()
 
 class OrdersTab(QWidget):
-    """Вкладка для просмотра всех заказов (только для продавцов)"""
-    def __init__(self):
+    """Вкладка для просмотра заказов (для продавцов - только свои)"""
+    def __init__(self, role, seller_pickup_point_id=None):
         super().__init__()
+        self.role = role
+        self.seller_pickup_point_id = seller_pickup_point_id
         self.order_manager = OrderManager()
         layout = QVBoxLayout()
         
-        title = QLabel("Все заказы")
+        title = QLabel("Заказы")
         title.setFont(QFont("Arial", 16, QFont.Bold))
         title.setStyleSheet("color: #9B59B6;")
         title.setAlignment(Qt.AlignCenter)
@@ -1322,10 +1293,11 @@ class OrdersTab(QWidget):
         layout.addWidget(refresh_btn)
         
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
             "ID", "Пользователь", "Дата", "Сумма (руб)", 
-            "Получатель", "Адрес", "Телефон", "Способ доставки", "Пункт выдачи"
+            "Получатель", "Адрес", "Телефон", "Способ доставки", 
+            "Пункт выдачи", "Статус"
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setAlternatingRowColors(True)
@@ -1336,11 +1308,14 @@ class OrdersTab(QWidget):
     
     def refresh_orders(self):
         """Обновляет таблицу с заказами"""
-        orders = self.order_manager.get_all_orders()
+        if self.role == 'seller' and self.seller_pickup_point_id:
+            orders = self.order_manager.get_orders_for_seller(self.seller_pickup_point_id)
+        else:
+            orders = self.order_manager.get_all_orders()
         
         if not orders:
             self.table.setRowCount(1)
-            self.table.setSpan(0, 0, 1, 9)
+            self.table.setSpan(0, 0, 1, 10)
             
             message_item = QTableWidgetItem("📦 Заказов нет")
             message_item.setTextAlignment(Qt.AlignCenter)
@@ -1349,11 +1324,8 @@ class OrdersTab(QWidget):
             
             self.table.setItem(0, 0, message_item)
             
-            for col in range(1, 9):
+            for col in range(1, 10):
                 self.table.setItem(0, col, QTableWidgetItem(""))
-            
-            if self.parent():
-                self.parent().setWindowTitle(f"Интернет-магазин - Заказов: 0")
             return
         
         self.table.clearSpans()
@@ -1373,12 +1345,39 @@ class OrdersTab(QWidget):
             if order.pickup_point:
                 pickup_info = order.pickup_point.name
             self.table.setItem(row, 8, QTableWidgetItem(pickup_info))
-        
-        if self.parent():
-            self.parent().setWindowTitle(f"Интернет-магазин - Заказов: {len(orders)}")
+            
+            # Статус заказа
+            status_text = "✅ Выполнен" if order.status == 'completed' else "⏳ В обработке"
+            status_item = QTableWidgetItem(status_text)
+            if order.status == 'completed':
+                status_item.setForeground(Qt.green)
+            else:
+                status_item.setForeground(Qt.blue)
+            self.table.setItem(row, 9, status_item)
+            
+            # Кнопка "Выполнить" для продавцов (только для невыполненных заказов)
+            if self.role == 'seller' and order.status != 'completed':
+                complete_btn = QPushButton("✅ Выполнить")
+                complete_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #27ae60;
+                    }
+                    QPushButton:hover {
+                        background-color: #229954;
+                    }
+                """)
+                complete_btn.clicked.connect(lambda _, oid=order.id: self.complete_order(oid))
+                self.table.setCellWidget(row, 9, complete_btn)
+    
+    def complete_order(self, order_id):
+        """Отмечает заказ как выполненный"""
+        if self.order_manager.complete_order(order_id):
+            QMessageBox.information(self, "Успешно", "Заказ отмечен как выполненный!")
+            self.refresh_orders()
+        else:
+            QMessageBox.warning(self, "Ошибка", "Не удалось отметить заказ")
 
 class AdminTab(QWidget):
-    """Вкладка для управления продавцами (только для админа)"""
     def __init__(self):
         super().__init__()
         self.user_manager = UserManager()
@@ -1394,7 +1393,6 @@ class AdminTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
-        # Группа создания продавца
         create_group = QGroupBox("Создать нового продавца")
         create_layout = QVBoxLayout()
         
@@ -1414,7 +1412,6 @@ class AdminTab(QWidget):
         create_group.setLayout(create_layout)
         layout.addWidget(create_group)
         
-        # Таблица продавцов
         self.table = QTableWidget()
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["ID", "Логин", "Пункт выдачи", "Действия"])
@@ -1425,7 +1422,6 @@ class AdminTab(QWidget):
         self.setLayout(layout)
     
     def refresh_sellers(self):
-        """Обновляет таблицу продавцов"""
         sellers = self.user_manager.get_all_sellers()
         pickup_points = self.user_manager.get_all_pickup_points()
         
@@ -1435,12 +1431,10 @@ class AdminTab(QWidget):
             self.table.setItem(row, 0, QTableWidgetItem(str(seller.id)))
             self.table.setItem(row, 1, QTableWidgetItem(seller.username))
             
-            # ComboBox для выбора пункта выдачи
             combo = QComboBox()
             for point in pickup_points:
                 combo.addItem(point.name, point.id)
             
-            # Устанавливаем текущий пункт выдачи
             if seller.pickup_point_id:
                 index = combo.findData(seller.pickup_point_id)
                 if index >= 0:
@@ -1449,7 +1443,6 @@ class AdminTab(QWidget):
             combo.currentIndexChanged.connect(lambda _, sid=seller.id, c=combo: self.change_pickup_point(sid, c))
             self.table.setCellWidget(row, 2, combo)
             
-            # Кнопка удаления
             delete_btn = QPushButton("Удалить")
             delete_btn.setStyleSheet("""
                 QPushButton {
@@ -1463,7 +1456,6 @@ class AdminTab(QWidget):
             self.table.setCellWidget(row, 3, delete_btn)
     
     def create_seller(self):
-        """Создает нового продавца"""
         login = self.new_login.text().strip()
         password = self.new_password.text().strip()
         
@@ -1475,7 +1467,6 @@ class AdminTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Пароль должен быть не менее 4 символов")
             return
         
-        # Получаем первый пункт выдачи
         pickup_points = self.user_manager.get_all_pickup_points()
         pickup_id = pickup_points[0].id if pickup_points else None
         
@@ -1488,13 +1479,11 @@ class AdminTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Не удалось создать продавца")
     
     def change_pickup_point(self, seller_id, combo):
-        """Изменяет пункт выдачи продавца"""
         pickup_id = combo.currentData()
         if pickup_id:
             self.user_manager.update_seller_pickup_point(seller_id, pickup_id)
     
     def delete_seller(self, seller_id):
-        """Удаляет продавца"""
         reply = QMessageBox.question(self, "Подтверждение", 
                                     "Вы уверены, что хотите удалить этого продавца?",
                                     QMessageBox.Yes | QMessageBox.No)
@@ -1507,7 +1496,6 @@ class AdminTab(QWidget):
                 QMessageBox.warning(self, "Ошибка", message)
 
 class PickupPointsTab(QWidget):
-    """Вкладка для управления пунктами выдачи (только для админа)"""
     def __init__(self):
         super().__init__()
         self.user_manager = UserManager()
@@ -1523,7 +1511,6 @@ class PickupPointsTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
-        # Группа создания пункта выдачи
         create_group = QGroupBox("Добавить пункт выдачи")
         create_layout = QVBoxLayout()
         
@@ -1546,7 +1533,6 @@ class PickupPointsTab(QWidget):
         create_group.setLayout(create_layout)
         layout.addWidget(create_group)
         
-        # Таблица пунктов выдачи с кнопкой удаления
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["ID", "Название", "Адрес", "Часы работы", "Действия"])
@@ -1557,7 +1543,6 @@ class PickupPointsTab(QWidget):
         self.setLayout(layout)
     
     def refresh_points(self):
-        """Обновляет таблицу пунктов выдачи"""
         points = self.user_manager.get_all_pickup_points()
         
         self.table.setRowCount(len(points))
@@ -1568,7 +1553,6 @@ class PickupPointsTab(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(point.address))
             self.table.setItem(row, 3, QTableWidgetItem(point.working_hours))
             
-            # Кнопка удаления
             delete_btn = QPushButton("Удалить")
             delete_btn.setStyleSheet("""
                 QPushButton {
@@ -1582,7 +1566,6 @@ class PickupPointsTab(QWidget):
             self.table.setCellWidget(row, 4, delete_btn)
     
     def create_pickup_point(self):
-        """Создает новый пункт выдачи"""
         name = self.name_input.text().strip()
         address = self.address_input.text().strip()
         hours = self.hours_input.text().strip()
@@ -1601,7 +1584,6 @@ class PickupPointsTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Не удалось добавить пункт выдачи")
     
     def delete_pickup_point(self, point_id):
-        """Удаляет пункт выдачи"""
         reply = QMessageBox.question(self, "Подтверждение", 
                                     "Вы уверены, что хотите удалить этот пункт выдачи?",
                                     QMessageBox.Yes | QMessageBox.No)
@@ -1614,7 +1596,6 @@ class PickupPointsTab(QWidget):
                 QMessageBox.warning(self, "Ошибка", message)
 
 class ProductsManagementTab(QWidget):
-    """Вкладка для управления товарами (для админа и продавцов)"""
     def __init__(self, product_manager, role):
         super().__init__()
         self.product_manager = product_manager
@@ -1631,7 +1612,6 @@ class ProductsManagementTab(QWidget):
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
-        # Группа добавления товара
         add_group = QGroupBox("Добавить новый товар")
         add_layout = QHBoxLayout()
         
@@ -1658,7 +1638,6 @@ class ProductsManagementTab(QWidget):
         add_group.setLayout(add_layout)
         layout.addWidget(add_group)
         
-        # Таблица товаров
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["ID", "Название", "Цена (руб)", "В наличии", "Редактировать", "Удалить"])
@@ -1669,7 +1648,6 @@ class ProductsManagementTab(QWidget):
         self.setLayout(layout)
     
     def refresh_products(self):
-        """Обновляет таблицу товаров"""
         products = self.product_manager.get_all_products()
         
         self.table.setRowCount(len(products))
@@ -1680,7 +1658,6 @@ class ProductsManagementTab(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(str(product["price"])))
             self.table.setItem(row, 3, QTableWidgetItem(str(product["stock"])))
             
-            # Кнопка редактирования
             edit_btn = QPushButton("✏️ Редактировать")
             edit_btn.setStyleSheet("""
                 QPushButton {
@@ -1693,7 +1670,6 @@ class ProductsManagementTab(QWidget):
             edit_btn.clicked.connect(lambda _, pid=product["id"]: self.edit_product(pid))
             self.table.setCellWidget(row, 4, edit_btn)
             
-            # Кнопка удаления
             delete_btn = QPushButton("🗑️ Удалить")
             delete_btn.setStyleSheet("""
                 QPushButton {
@@ -1707,7 +1683,6 @@ class ProductsManagementTab(QWidget):
             self.table.setCellWidget(row, 5, delete_btn)
     
     def add_product(self):
-        """Добавляет новый товар"""
         name = self.name_input.text().strip()
         price_text = self.price_input.text().strip()
         
@@ -1739,7 +1714,6 @@ class ProductsManagementTab(QWidget):
             QMessageBox.warning(self, "Ошибка", "Не удалось добавить товар")
     
     def edit_product(self, product_id):
-        """Открывает диалог редактирования товара"""
         product = self.product_manager.get_product_by_id(product_id)
         if not product:
             return
@@ -1767,7 +1741,6 @@ class ProductsManagementTab(QWidget):
         
         layout.addLayout(form_layout)
         
-        # Кнопки
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1794,40 +1767,18 @@ class ProductsManagementTab(QWidget):
             if self.product_manager.update_product(product_id, name, price, stock):
                 QMessageBox.information(self, "Успешно", "Товар обновлен!")
                 self.refresh_products()
-                # Обновляем список товаров в основном окне
                 if self.parent() and hasattr(self.parent(), 'products_tab'):
                     self.parent().products_tab.products = self.product_manager.get_all_products()
                     self.parent().products_tab.update_products_table()
-                # Обновляем корзину
                 if self.parent() and hasattr(self.parent(), 'cart_tab'):
                     self.parent().cart_tab.update_cart_table()
             else:
                 QMessageBox.warning(self, "Ошибка", "Не удалось обновить товар")
     
     def delete_product(self, product_id):
-        """Удаляет товар"""
         product = self.product_manager.get_product_by_id(product_id)
         if not product:
             return
-        
-        # Проверяем, есть ли товар в заказах (сохраненных в БД)
-        try:
-            from sqlalchemy import create_engine
-            from sqlalchemy.orm import sessionmaker
-            from sqlalchemy import text
-            
-            engine = create_engine('sqlite:///online_store.db', echo=False)
-            Session = sessionmaker(bind=engine)
-            session = Session()
-            
-            # Проверяем, есть ли товар в заказах (хранятся в JSON)
-            # Это сложная проверка, так как товары хранятся в JSON-поле
-            # Для простоты пропускаем эту проверку в демо-версии
-            
-            session.close()
-            
-        except Exception as e:
-            print(f"Ошибка при проверке заказов: {e}")
         
         reply = QMessageBox.question(
             self, 
@@ -1848,7 +1799,6 @@ class ProductsManagementTab(QWidget):
                 Session = sessionmaker(bind=engine)
                 session = Session()
                 
-                # Удаляем товар из всех корзин
                 deleted_count = session.query(Cart).filter_by(product_id=product_id).delete()
                 session.commit()
                 session.close()
@@ -1859,20 +1809,15 @@ class ProductsManagementTab(QWidget):
             except Exception as e:
                 print(f"Ошибка при удалении товара из корзин: {e}")
             
-            # Удаляем товар из списка товаров
             if self.product_manager.delete_product(product_id):
                 QMessageBox.information(self, "Успешно", f"Товар '{product['name']}' удален!")
                 self.refresh_products()
-                # Обновляем список товаров в основном окне
                 if self.parent() and hasattr(self.parent(), 'products_tab'):
                     self.parent().products_tab.products = self.product_manager.get_all_products()
                     self.parent().products_tab.update_products_table()
-                # Обновляем корзину
                 if self.parent() and hasattr(self.parent(), 'cart_tab'):
                     self.parent().cart_tab.update_cart_table()
-                # Обновляем корзину пользователя
                 if self.parent() and hasattr(self.parent(), 'cart'):
-                    # Удаляем товар из текущей корзины пользователя
                     if product_id in self.parent().cart:
                         del self.parent().cart[product_id]
                         if hasattr(self.parent(), 'cart_tab'):
